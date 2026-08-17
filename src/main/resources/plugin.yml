@@ -1,0 +1,6 @@
+name: HotPotato
+version: 1.0
+main: com.minecraft.minigame.BukkitMain
+author: GabrielMartins
+commands:
+  start:
