@@ -1,6 +1,7 @@
 package com.minecraft.minigame.game.listener.game;
 
 import com.minecraft.minigame.game.Game;
+import com.minecraft.minigame.game.player.GamePlayer;
 import com.minecraft.minigame.game.stage.GameStage;
 import lombok.RequiredArgsConstructor;
 import org.bukkit.entity.Player;
@@ -14,13 +15,12 @@ import org.bukkit.event.player.PlayerPickupItemEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
 @RequiredArgsConstructor
-public class GameListener implements Listener {
+public final class GameListener implements Listener {
 
     private final Game game;
 
     @EventHandler
-    public void onDamage(EntityDamageByEntityEvent event) {
-
+    public void onDamage(final EntityDamageByEntityEvent event) {
         if (!(event.getDamager() instanceof Player)) {
             return;
         }
@@ -29,51 +29,70 @@ public class GameListener implements Listener {
             return;
         }
 
-        var attacker = (Player) event.getDamager();
-        var target = (Player) event.getEntity();
+        final Player attacker = (Player) event.getDamager();
+        final Player target = (Player) event.getEntity();
 
         if (game.getStage() != GameStage.PLAYING) {
             event.setCancelled(true);
             return;
         }
 
-        if (game.getHotPotato() != attacker) {
+        final GamePlayer attackerData = game.getPlayer(attacker);
+        final GamePlayer targetData = game.getPlayer(target);
+
+        if (attackerData == null || targetData == null) {
             event.setCancelled(true);
             return;
         }
+
+
+        if (!attackerData.isAlive() || !targetData.isAlive()) {
+            event.setCancelled(true);
+            return;
+        }
+
+        if (game.getHotPotato() != attackerData) {
+            event.setCancelled(true);
+            return;
+        }
+
+        event.setCancelled(true);
 
         game.setHotPotato(target);
     }
 
     @EventHandler
-    public void onJoin(PlayerJoinEvent event) {
-        var player = event.getPlayer();
-
-        game.join(player);
-
+    public void onJoin(final PlayerJoinEvent event) {
+        game.join(event.getPlayer());
     }
 
     @EventHandler
-    public void onQuit(PlayerQuitEvent event) {
-        var player = event.getPlayer();
-
-        game.leave(player);
-    }
-
-
-    @EventHandler
-    public void a(PlayerDropItemEvent event) {
-        event.setCancelled(true);
+    public void onQuit(final PlayerQuitEvent event) {
+        game.leave(event.getPlayer());
     }
 
     @EventHandler
-    public void b(PlayerPickupItemEvent event) {
-        event.setCancelled(true);
+    public void onDrop(final PlayerDropItemEvent event) {
+        if (game.getPlayer(event.getPlayer()) != null) {
+            event.setCancelled(true);
+        }
     }
 
     @EventHandler
-    public void c(InventoryClickEvent event) {
-        event.setCancelled(true);
+    public void onPickup(final PlayerPickupItemEvent event) {
+        if (game.getPlayer(event.getPlayer()) != null) {
+            event.setCancelled(true);
+        }
     }
 
+    @EventHandler
+    public void onInventoryClick(final InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player)) {
+            return;
+        }
+
+        if (game.getPlayer((Player) event.getWhoClicked()) != null) {
+            event.setCancelled(true);
+        }
+    }
 }

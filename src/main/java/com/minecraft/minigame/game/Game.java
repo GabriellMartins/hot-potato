@@ -1,11 +1,12 @@
 package com.minecraft.minigame.game;
 
 import com.minecraft.minigame.BukkitMain;
+import com.minecraft.minigame.game.player.GamePlayer;
 import com.minecraft.minigame.game.stage.GameStage;
+import com.minecraft.minigame.utils.NameTag;
 import lombok.Getter;
 import net.md_5.bungee.api.ChatMessageType;
 import net.md_5.bungee.api.chat.TextComponent;
-import net.minecraft.server.v1_8_R3.ChatMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
@@ -16,232 +17,341 @@ import org.bukkit.scheduler.BukkitRunnable;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Random;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Getter
-public class Game {
+public final class Game {
+
+    private final List<GamePlayer> players = new ArrayList<>();
 
     private GameStage stage = GameStage.WAITING;
-
-    private final List<Player> players = new ArrayList<>();
-
-    private Player hotPotato;
-
-    private int time;
+    private GamePlayer hotPotato;
 
     private int countdown;
+    private int time;
 
-    public void startGame(Location location) {
+    public Game() {
+        new BukkitRunnable() {
 
-        if (players.size() < 2) {
+            @Override
+            public void run() {
+                tick();
+            }
+
+        }.runTaskTimer(BukkitMain.getInstance(), 20L, 20L);
+    }
+
+    private void tick() {
+        switch (stage) {
+            case STARTING:
+                tickStarting();
+                break;
+
+            case PLAYING:
+                tickPlaying();
+                break;
+        }
+    }
+
+    private void tickStarting() {
+        if (getAlivePlayers().size() < 2) {
+            stage = GameStage.WAITING;
+            countdown = 0;
+
+            broadcast("§cJogadores insuficientes. Partida cancelada.");
+            return;
+        }
+
+        if (countdown <= 0) {
+            stage = GameStage.PLAYING;
+
+            startHotPotato();
+
+            broadcast("§a§lPARTIDA INICIADA!");
+            return;
+        }
+
+        broadcast("§aA partida vai iniciar em §c" + countdown + "§a!");
+        countdown--;
+    }
+
+    private void tickPlaying() {
+        if (getAlivePlayers().size() <= 1) {
+            endGame();
+            return;
+        }
+
+        if (hotPotato == null) {
+            startHotPotato();
+            return;
+        }
+
+        final Player player = hotPotato.getPlayer();
+
+        if (!player.isOnline()) {
+            leave(player);
+            return;
+        }
+
+        player.spigot().sendMessage(new TextComponent("§cExplode em §e" + time + "s"));
+
+        if (time <= 0) {
+            explodeHotPotato();
+            return;
+        }
+
+        time--;
+    }
+
+    public void join(final Player player) {
+        if (getPlayer(player) != null) {
+            return;
+        }
+
+        if (stage != GameStage.WAITING) {
+            player.sendMessage("§cA partida já começou!");
+            return;
+        }
+
+        players.add(new GamePlayer(
+                player.getUniqueId(),
+                player.getName(),
+                player
+        ));
+
+        preparePlayer(player);
+        NameTag.normal(player);
+
+        player.sendMessage("§aVocê entrou na partida!");
+
+        if (players.size() >= 2) {
+            startGame();
+        }
+    }
+
+    public void leave(final Player player) {
+        final GamePlayer gamePlayer = getPlayer(player);
+
+        if (gamePlayer == null) {
+            NameTag.remove(player);
+            return;
+        }
+
+        final boolean wasHotPotato = hotPotato == gamePlayer;
+
+        players.remove(gamePlayer);
+        NameTag.remove(player);
+
+        if (hotPotato == gamePlayer) {
+            hotPotato = null;
+        }
+
+        if (stage == GameStage.STARTING) {
+            if (getAlivePlayers().size() < 2) {
+                stage = GameStage.WAITING;
+                countdown = 0;
+
+                broadcast("§cJogadores insuficientes. Partida cancelada.");
+            }
+
+            return;
+        }
+
+        if (stage != GameStage.PLAYING) {
+            return;
+        }
+
+        if (getAlivePlayers().size() <= 1) {
+            endGame();
+            return;
+        }
+
+        if (wasHotPotato) {
+            startHotPotato();
+        }
+    }
+
+    private void startGame() {
+        if (stage != GameStage.WAITING || players.size() < 2) {
             return;
         }
 
         stage = GameStage.STARTING;
         countdown = 5;
 
-        for (Player player : players) {
-            player.teleport(location);
-            player.getInventory().setHelmet(null);
-
-            player.sendMessage("§aA partida foi iniciada!");
-        }
-        new BukkitRunnable() {
-
-            @Override
-            public void run() {
-                if (stage != GameStage.STARTING) {
-                    cancel();
-                    return;
-                }
-
-                if (players.size() < 2) {
-                    return;
-                }
-
-                if (countdown <= 0) {
-                    cancel();
-
-                    stage = GameStage.PLAYING;
-                    RandomHotPotato();
-                    return;
-                }
-                for (Player player : players) {
-                    player.sendMessage("§aA partida vai iniciar em §c" + countdown);
-                }
-                countdown--;
-            }
-
-        }.runTaskTimer(BukkitMain.getInstance(), 0L, 20L);
-
-        var location1 = new Location(
+        final Location spawn = new Location(
                 Bukkit.getWorld("world"),
                 0.5,
                 100,
-                0.5
+                -4.5
         );
 
+        for (final GamePlayer gamePlayer : players) {
+            final Player player = gamePlayer.getPlayer();
 
+            player.teleport(spawn);
+
+            preparePlayer(player);
+            NameTag.normal(player);
+        }
+
+        broadcast("§aA partida vai começar!");
     }
 
-    public void endGame() {
-        stage = GameStage.ENDING;
-        if (hotPotato != null) {
-            hotPotato.getInventory().setHelmet(null);
-            hotPotato = null;
+    private void startHotPotato() {
+        final List<GamePlayer> alivePlayers = getAlivePlayers();
+
+        if (alivePlayers.isEmpty()) {
+            return;
         }
 
-        var winner = players.size() == 1 ? players.get(0) : null;
+        setHotPotato(
+                alivePlayers.get(
+                        ThreadLocalRandom.current().nextInt(
+                                alivePlayers.size()
+                        )
+                )
+        );
 
-        if (winner != null) {
-            Bukkit.broadcastMessage(
-                    "§aVocê ganhou o hotpotato!"
-            );
-        }
-
-        for (Player player : players) {
-            player.getInventory().setHelmet(null);
-            player.sendMessage("§cPartida finalizada!");
-        }
-        players.clear();
-
-        new
-                BukkitRunnable() {
-
-                    @Override
-                    public void run() {
-                        stage = GameStage.WAITING;
-
-                    }
-                }.runTaskLater(BukkitMain.getInstance(), 20L * 3);
+        time = 30;
     }
 
-    public void setHotPotato(Player player) {
-        if (hotPotato != null) {
-            hotPotato.getInventory().setHelmet(null);
+    public void setHotPotato(final Player player) {
+        final GamePlayer gamePlayer = getPlayer(player);
+
+        if (gamePlayer == null || !gamePlayer.isAlive()) {
+            return;
         }
 
-        hotPotato = player;
+        setHotPotato(gamePlayer);
+    }
 
+    private void setHotPotato(final GamePlayer gamePlayer) {
+        if (hotPotato != null) {
+            final Player previous = hotPotato.getPlayer();
 
-        player.getInventory().setHelmet(new ItemStack(Material.TNT));
+            previous.getInventory().setHelmet(null);
+            NameTag.normal(previous);
+        }
+
+        hotPotato = gamePlayer;
+
+        final Player player = gamePlayer.getPlayer();
+
+        player.getInventory().setHelmet(
+                new ItemStack(Material.TNT)
+        );
+
+        NameTag.hotPotato(player);
 
         player.sendMessage("§cVocê está com a batata!");
     }
 
-    public void join(Player player) {
+    private void explodeHotPotato() {
+        final GamePlayer loser = hotPotato;
 
-        if (players.contains(player)) {
+        if (loser == null) {
             return;
         }
 
-        if (stage != GameStage.WAITING) {
-            player.sendMessage("§aApartida começou!");
+        final Player player = loser.getPlayer();
+
+        player.getInventory().setHelmet(null);
+        player.getWorld().createExplosion(
+                player.getLocation(),
+                0F
+        );
+
+        loser.setSpectator();
+
+        player.setGameMode(GameMode.SPECTATOR);
+        NameTag.spectator(player);
+
+        player.sendMessage(
+                "§c§lBOOM! §7Você foi eliminado!"
+        );
+
+        hotPotato = null;
+
+        if (getAlivePlayers().size() <= 1) {
+            endGame();
             return;
         }
-        players.add(player);
 
-        if (players.size() >= 2 && stage == GameStage.WAITING);
-
-        startGame(new Location(
-                Bukkit.getWorld("world"),
-                0, 100, -4
-        ));
+        startHotPotato();
     }
 
-    public void leave(Player player) {
-        player.remove();
+    private void endGame() {
+        if (stage != GameStage.PLAYING) {
+            return;
+        }
 
-        if (hotPotato == player) {
-            player.getInventory().setHelmet(null);
+        stage = GameStage.ENDING;
+
+        if (hotPotato != null) {
+            hotPotato.getPlayer()
+                    .getInventory()
+                    .setHelmet(null);
+
             hotPotato = null;
         }
 
-        player.sendMessage("§cVocê saiu da partida");
+        final List<GamePlayer> alivePlayers = getAlivePlayers();
 
-        if (players.size() < 2 && stage == GameStage.STARTING) {
-            stage = GameStage.WAITING;
+        if (alivePlayers.size() == 1) {
+            alivePlayers.get(0).getPlayer().sendMessage(
+                    "§a§lVOCÊ GANHOU O HOT POTATO!"
+            );
         }
 
-        if (players.size() <= 1 && stage == GameStage.PLAYING) {
-            endGame();
-        }
-    }
+        broadcast("§cPartida finalizada!");
 
-    private void startHotPotato() {
-
-        time = 30;
-
-        new BukkitRunnable() {
-
-            @Override
-            public void run() {
-
-                if (stage != GameStage.PLAYING || hotPotato == null) {
-                    cancel();
-                    return;
-                }
-
-                hotPotato.spigot().sendMessage(
-                        new TextComponent(
-                                "§CExplode em §e" +
-                                        time + "s"
-                        )
-                );
-
-                if (time <= 0) {
-
-                    cancel();
-
-                    Player loser = hotPotato;
-
-                    loser.getInventory().setHelmet(null);
-
-                    loser.getWorld().createExplosion(
-                            loser.getLocation(),
-                            0F
-                    );
-
-                    players.remove(loser);
-
-                    hotPotato = null;
-
-                    loser.setGameMode(GameMode.SPECTATOR);
-
-                    loser.sendMessage(
-                            "§c§lBOOM! §7Você foi eliminado!"
-                    );
-
-                    if (players.size() <= 1) {
-                        endGame();
-                    } else {
-                        RandomHotPotato();
-                    }
-
-                    return;
-                }
-
-                time--;
-            }
-
-        }.runTaskTimer(
+        Bukkit.getScheduler().runTaskLater(
                 BukkitMain.getInstance(),
-                0L,
-                20L
+                () -> Bukkit.spigot().restart(),
+                20L * 3
         );
     }
 
-    private void RandomHotPotato() {
-        Player player = players.get(
-                new Random().nextInt(players.size())
-        );
-        setHotPotato(player);
+    private void preparePlayer(final Player player) {
+        player.setGameMode(GameMode.ADVENTURE);
+        player.getInventory().clear();
+        player.getInventory().setHelmet(null);
+    }
 
-        startHotPotato();
+    public GamePlayer getPlayer(final Player player) {
+        for (final GamePlayer gamePlayer : players) {
+            if (gamePlayer.getUniqueId().equals(player.getUniqueId())) {
+                return gamePlayer;
+            }
+        }
 
+        return null;
+    }
+
+    public List<GamePlayer> getAlivePlayers() {
+        final List<GamePlayer> alivePlayers = new ArrayList<>();
+
+        for (final GamePlayer player : players) {
+            if (player.isAlive()) {
+                alivePlayers.add(player);
+            }
+        }
+
+        return alivePlayers;
     }
 
     public boolean isInvulnerable() {
         return stage.isInvulnerable();
+    }
+
+    private void broadcast(final String message) {
+        for (final GamePlayer gamePlayer : players) {
+            final Player player = gamePlayer.getPlayer();
+
+            if (player.isOnline()) {
+                player.sendMessage(message);
+            }
+        }
     }
 }

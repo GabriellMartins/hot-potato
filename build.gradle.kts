@@ -18,7 +18,7 @@ dependencies {
     testCompileOnly(libs.lombok)
     testAnnotationProcessor(libs.lombok)
 
-    compileOnly(files("E:/API/yunity.jar"))
+    compileOnly(files("E:/api/nartema.jar"))
 
 }
 
